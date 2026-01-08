@@ -23,7 +23,7 @@ def init_session_state() -> None:
         "vector_store": None,
         "processed_documents": [],
         "messages": [],
-        "current_api_key": "" # Store the active key here
+        "current_api_key": ""
     }
     
     for key, value in defaults.items():
@@ -62,29 +62,17 @@ def setup_sidebar() -> None:
             st.success("✅ API Key loaded from system")
             st.caption("Using host provided credentials")
         else:
-            # If no secret, ask user. notice key="user_provided_key" to fix the widget crash
             st.text_input(
                 "Google API Key",
                 type="password",
                 help="Enter your Google Gemini API Key",
                 key="user_provided_key"
             )
-            # Update the session state with the manual input
             if st.session_state.user_provided_key:
                 st.session_state.current_api_key = st.session_state.user_provided_key
         
-        if st.session_state.processed_documents:
-            st.markdown("---")
-            st.header("📚 Knowledge Base")
-            for doc in st.session_state.processed_documents:
-                st.caption(f"📄 {doc}")
-        
         st.markdown("---")
-        st.markdown("### About")
-        st.info(
-            "This agent uses **Google Gemini 1.5** for reasoning and **FAISS** for retrieval. "
-            "Upload a PDF, ask a question, and get a voice response!"
-        )
+        # Document list will be rendered in main after uploader
 
 def process_pdf_data(file_data: bytes, file_name: str) -> List:
     """Helper to process PDF bytes directly."""
@@ -105,7 +93,7 @@ def process_pdf_data(file_data: bytes, file_name: str) -> List:
         
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
-            chunk_overlap=200
+            chunk_overlap=400
         )
         
         # Cleanup temp file
@@ -134,7 +122,7 @@ def update_vector_store(documents: List, api_key: str) -> None:
 def generate_gemini_response(context: str, query: str, api_key: str) -> str:
     """Generate response using Google Gemini."""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     prompt = f"""You are a helpful assistant. Use the following context to answer the user's question.    
 Context:
@@ -162,7 +150,7 @@ async def process_query(query: str, api_key: str) -> Dict:
             raise Exception("Vector store not initialized")
 
         # Search documents
-        search_results = st.session_state.vector_store.similarity_search(query, k=3)
+        search_results = st.session_state.vector_store.similarity_search(query, k=10)
         
         if not search_results:
             raise Exception("No relevant documents found")
@@ -219,6 +207,34 @@ def load_default_resume(api_key: str):
                 status.update(label="❌ Demo Load Failed", state="error")
                 st.error(f"Could not load default resume: {str(e)}")
 
+def process_uploaded_files(files: List, api_key: str):
+    """Process a list of uploaded files."""
+    if not api_key:
+        st.warning("⚠️ Please provide your Google API Key first!")
+        return
+
+    for file in files:
+        if file.name not in st.session_state.processed_documents:
+            with st.status(f"Processing {file.name}...", expanded=True) as status:
+                try:
+                    st.write("📄 Parsing PDF content...")
+                    file_bytes = file.getvalue()
+                    documents = process_pdf_data(file_bytes, file.name)
+                    
+                    if documents:
+                        st.write("🧠 Generating embeddings & indexing...")
+                        update_vector_store(documents, api_key)
+                        st.session_state.processed_documents.append(file.name)
+                        st.session_state.setup_complete = True
+                        status.update(label=f"✅ {file.name} added!", state="complete", expanded=False)
+                except Exception as e:
+                    status.update(label="❌ Error processing", state="error")
+                    st.error(f"Error processing {file.name}: {str(e)}")
+    
+    # Rerun if we processed anything to update state
+    if files:
+        st.rerun()
+
 def main() -> None:
     """Main application function."""
     st.set_page_config(
@@ -239,19 +255,42 @@ def main() -> None:
     init_session_state()
     setup_sidebar()
     
-    # Get the active API key (from secrets or user input)
+    # Get the active API key
     active_key = get_api_key()
 
+    # Sidebar Upload Section
+    with st.sidebar:
+        st.header("📄 Add Documents")
+        sidebar_uploads = st.file_uploader(
+            "Upload PDFs", 
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="sidebar_uploader"
+        )
+        if sidebar_uploads:
+            process_uploaded_files(sidebar_uploads, active_key)
+            
+        if st.session_state.processed_documents:
+            st.markdown("---")
+            st.header("📚 Knowledge Base")
+            for doc in st.session_state.processed_documents:
+                st.caption(f"📄 {doc}")
+            
+        st.markdown("### About")
+        st.info(
+            "This agent uses **Gemini 2.5 Flash** for reasoning and **FAISS** for retrieval. "
+            "Upload a PDF, ask a question, and get a voice response!"
+        )
+
     st.title("🎙️ Voice RAG Agent")
-    st.caption("Powered by **Gemini 1.5 Flash** & **FAISS**")
+    st.caption("Powered by **Gemini 2.5 Flash** & **FAISS**")
     
-    # 1. Automatic Demo Loader
-    # If we have a key, no docs yet, and resume.pdf exists -> Load it automatically
+    # Automatic Demo Loader
     if active_key and not st.session_state.setup_complete:
         if os.path.exists("resume.pdf"):
             load_default_resume(active_key)
     
-    # 2. Main Interface Logic
+    # Main Interface
     if not st.session_state.setup_complete:
         st.markdown("""
         <div style='text-align: center; padding: 2rem; border: 2px dashed #cccccc; border-radius: 10px; margin-bottom: 2rem;'>
@@ -262,31 +301,15 @@ def main() -> None:
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            uploaded_file = st.file_uploader("Upload PDF Document", type=["pdf"])
+            # Center uploader for empty state
+            center_upload = st.file_uploader(
+                "Upload PDF Document", 
+                type=["pdf"], 
+                key="center_uploader"
+            )
             
-            if uploaded_file:
-                if not active_key:
-                    st.warning("⚠️ Please provide your Google API Key in the sidebar first!")
-                else:
-                    file_name = uploaded_file.name
-                    if file_name not in st.session_state.processed_documents:
-                        with st.status("🚀 Processing document...", expanded=True) as status:
-                            try:
-                                st.write("📄 Parsing PDF content...")
-                                # Get bytes from uploaded file object
-                                file_bytes = uploaded_file.getvalue()
-                                documents = process_pdf_data(file_bytes, file_name)
-                                
-                                if documents:
-                                    st.write("🧠 Generating embeddings & indexing...")
-                                    update_vector_store(documents, active_key)
-                                    st.session_state.processed_documents.append(file_name)
-                                    st.session_state.setup_complete = True
-                                    status.update(label="✅ Ready to chat!", state="complete", expanded=False)
-                                    st.rerun()
-                            except Exception as e:
-                                status.update(label="❌ Error processing", state="error")
-                                st.error(f"Error: {str(e)}")
+            if center_upload:
+                process_uploaded_files([center_upload], active_key)
 
     else:
         # Chat Interface
