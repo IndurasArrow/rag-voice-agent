@@ -1,0 +1,10 @@
+streamlit==1.51.0
+langchain==1.0.3
+langchain-community==0.4.1
+langchain-text-splitters==1.0.0
+google-generativeai
+langchain-google-genai
+faiss-cpu
+gTTS
+python-dotenv
+pypdf

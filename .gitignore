@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+venv/
+.gemini/
+*.mp3
+nohup.out
